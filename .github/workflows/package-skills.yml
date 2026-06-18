@@ -1,17 +1,22 @@
 name: Package skills
 
-# Packages each skill folder into a portable <skill-name>.skill (zip) archive and
-# publishes it as a GitHub Release asset. Only the skill(s) whose folder changed
-# in a push are (re)built — so editing one skill doesn't re-release the others.
-# A skill folder is any top-level directory containing .claude-plugin/plugin.json.
+# Packages each skill folder into a portable <skill>.skill (zip) archive and
+# publishes it as a GitHub Release asset. On a push, only the skill(s) whose
+# folder changed are (re)built. You can also run it manually to publish one
+# specific skill, or all of them. A skill folder is any top-level directory
+# containing .claude-plugin/plugin.json.
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
     inputs:
+      skill:
+        description: "Package only this one skill (folder name, e.g. hebrew-md-to-docx). Leave blank for change detection / all."
+        type: string
+        default: ""
       all:
-        description: "Rebuild and publish every skill, ignoring the change detection"
+        description: "Rebuild and publish every skill (ignored when a single skill is given above)"
         type: boolean
         default: false
 
@@ -23,13 +28,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout (full history for change detection)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Determine which skills to package
         id: detect
         env:
+          SKILL_INPUT: ${{ github.event.inputs.skill }}
           FORCE_ALL: ${{ github.event.inputs.all }}
         run: |
           set -euo pipefail
@@ -41,12 +47,19 @@ jobs:
             done | sort -u
           )
 
-          if [ "${FORCE_ALL:-false}" = "true" ]; then
+          if [ -n "${SKILL_INPUT:-}" ]; then
+            # Manual run targeting one specific skill.
+            if [ ! -f "${SKILL_INPUT}/.claude-plugin/plugin.json" ]; then
+              echo "::error::Unknown skill '${SKILL_INPUT}'. Known skills: ${ALL_SKILLS[*]}"
+              exit 1
+            fi
+            SELECTED=("$SKILL_INPUT")
+          elif [ "${FORCE_ALL:-false}" = "true" ]; then
             # Manual run with "all" checked: package everything.
             SELECTED=("${ALL_SKILLS[@]}")
           else
             # Diff this push. Fall back to the repo's first commit when "before"
-            # is unavailable (first push, force-push, or a fresh branch).
+            # is unavailable (first push, force-push, fresh branch, or manual run).
             BEFORE="${{ github.event.before }}"
             AFTER="${{ github.sha }}"
             if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
@@ -63,7 +76,7 @@ jobs:
           fi
 
           if [ "${#SELECTED[@]}" -eq 0 ]; then
-            echo "No skill folders changed in this push; nothing to package."
+            echo "No skill folders to package; nothing to do."
             echo "skills=" >> "$GITHUB_OUTPUT"
           else
             echo "Will package: ${SELECTED[*]}"
@@ -102,7 +115,7 @@ jobs:
 
       - name: Upload archives as workflow artifacts
         if: steps.detect.outputs.skills != ''
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: skills
           path: dist/*.skill
