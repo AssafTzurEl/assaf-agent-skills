@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin.json",
+  "name": "hebrew-md-to-pptx",
+  "version": "1.0.0",
+  "description": "Convert Hebrew or mixed Hebrew/English slide-Markdown into an RTL-aware PowerPoint .pptx skeleton (real title/body placeholders, sections, speaker notes, per-paragraph direction).",
+  "author": {
+    "name": "Assaf Tzur-El",
+    "email": "assaf@tzurel.co.il"
+  },
+  "homepage": "https://github.com/AssafTzurEl/assaf-agent-skills",
+  "repository": "https://github.com/AssafTzurEl/assaf-agent-skills",
+  "license": "MIT",
+  "keywords": ["hebrew", "rtl", "bidi", "markdown", "pptx", "powerpoint", "slides"]
+}

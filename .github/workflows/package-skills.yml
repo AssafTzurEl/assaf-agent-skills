@@ -1,0 +1,109 @@
+name: Package skills
+
+# Packages each skill folder into a portable <skill-name>.skill (zip) archive and
+# publishes it as a GitHub Release asset. Only the skill(s) whose folder changed
+# in a push are (re)built — so editing one skill doesn't re-release the others.
+# A skill folder is any top-level directory containing .claude-plugin/plugin.json.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      all:
+        description: "Rebuild and publish every skill, ignoring the change detection"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history for change detection)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine which skills to package
+        id: detect
+        env:
+          FORCE_ALL: ${{ github.event.inputs.all }}
+        run: |
+          set -euo pipefail
+
+          # Every top-level dir that is a plugin (has .claude-plugin/plugin.json).
+          mapfile -t ALL_SKILLS < <(
+            for d in */; do
+              [ -f "${d}.claude-plugin/plugin.json" ] && echo "${d%/}"
+            done | sort -u
+          )
+
+          if [ "${FORCE_ALL:-false}" = "true" ]; then
+            # Manual run with "all" checked: package everything.
+            SELECTED=("${ALL_SKILLS[@]}")
+          else
+            # Diff this push. Fall back to the repo's first commit when "before"
+            # is unavailable (first push, force-push, or a fresh branch).
+            BEFORE="${{ github.event.before }}"
+            AFTER="${{ github.sha }}"
+            if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+              BEFORE="$(git rev-list --max-parents=0 HEAD | tail -n 1)"
+            fi
+            mapfile -t CHANGED_DIRS < <(git diff --name-only "$BEFORE" "$AFTER" | awk -F/ 'NF>1 {print $1}' | sort -u)
+
+            SELECTED=()
+            for s in "${ALL_SKILLS[@]}"; do
+              for c in "${CHANGED_DIRS[@]:-}"; do
+                if [ "$s" = "$c" ]; then SELECTED+=("$s"); break; fi
+              done
+            done
+          fi
+
+          if [ "${#SELECTED[@]}" -eq 0 ]; then
+            echo "No skill folders changed in this push; nothing to package."
+            echo "skills=" >> "$GITHUB_OUTPUT"
+          else
+            echo "Will package: ${SELECTED[*]}"
+            echo "skills=${SELECTED[*]}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and publish .skill archives
+        if: steps.detect.outputs.skills != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for s in ${{ steps.detect.outputs.skills }}; do
+            ver="$(jq -r '.version' "$s/.claude-plugin/plugin.json")"
+            [ "$ver" = "null" ] && ver="0.0.0"
+
+            # Zip the inner skill folder so the archive root is <skill>/SKILL.md,
+            # which is the shape claude.ai (Settings > Capabilities) expects.
+            archive="$PWD/dist/${s}.skill"
+            rm -f "$archive"
+            ( cd "$s/skills" && zip -r -X "$archive" "$s" )
+
+            tag="${s}-v${ver}"
+            title="${s} v${ver}"
+            if gh release view "$tag" >/dev/null 2>&1; then
+              echo "Updating existing release $tag"
+              gh release upload "$tag" "$archive" --clobber
+            else
+              echo "Creating release $tag"
+              gh release create "$tag" "$archive" \
+                --title "$title" \
+                --notes "Packaged \`${s}\` skill v${ver}. Download the \`.skill\` and upload it under claude.ai → Settings → Capabilities, or install via the marketplace: \`/plugin install ${s}@assaf\`."
+            fi
+          done
+
+      - name: Upload archives as workflow artifacts
+        if: steps.detect.outputs.skills != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: skills
+          path: dist/*.skill
+          if-no-files-found: ignore

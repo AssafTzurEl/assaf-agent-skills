@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin.json",
+  "name": "hebrew-md-to-docx",
+  "version": "1.0.0",
+  "description": "Convert Hebrew or mixed Hebrew/English Markdown into a properly formatted, RTL-aware Word .docx (per-paragraph direction, correct bidi for inline code, numbers, and punctuation).",
+  "author": {
+    "name": "Assaf Tzur-El",
+    "email": "assaf@tzurel.co.il"
+  },
+  "homepage": "https://github.com/AssafTzurEl/assaf-agent-skills",
+  "repository": "https://github.com/AssafTzurEl/assaf-agent-skills",
+  "license": "MIT",
+  "keywords": ["hebrew", "rtl", "bidi", "markdown", "docx", "word"]
+}

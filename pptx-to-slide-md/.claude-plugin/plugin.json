@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin.json",
+  "name": "pptx-to-slide-md",
+  "version": "1.0.0",
+  "description": "Extract an existing PowerPoint .pptx back into slide-structured Markdown (title + body per slide, presenter instructions in [brackets], speaker notes). Inverse of hebrew-md-to-pptx, so a deck can round-trip.",
+  "author": {
+    "name": "Assaf Tzur-El",
+    "email": "assaf@tzurel.co.il"
+  },
+  "homepage": "https://github.com/AssafTzurEl/assaf-agent-skills",
+  "repository": "https://github.com/AssafTzurEl/assaf-agent-skills",
+  "license": "MIT",
+  "keywords": ["pptx", "powerpoint", "markdown", "slides", "extract", "round-trip"]
+}

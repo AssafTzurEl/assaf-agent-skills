@@ -1,0 +1,15 @@
+# Packaged skill artifacts (built by CI or locally)
+dist/
+*.skill
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

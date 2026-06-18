@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "assaf",
+  "version": "1.0.0",
+  "description": "Assaf Tzur-El's personal collection of Agent Skills (the open SKILL.md standard), each cataloged as an individually installable plugin.",
+  "owner": {
+    "name": "Assaf Tzur-El",
+    "email": "assaf@tzurel.co.il"
+  },
+  "plugins": [
+    {
+      "name": "hebrew-md-to-docx",
+      "source": "./hebrew-md-to-docx",
+      "description": "Convert Hebrew or mixed Hebrew/English Markdown into a properly formatted, RTL-aware Word .docx.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Assaf Tzur-El",
+        "email": "assaf@tzurel.co.il"
+      },
+      "category": "productivity",
+      "tags": ["hebrew", "rtl", "markdown", "docx", "word"]
+    },
+    {
+      "name": "hebrew-md-to-pptx",
+      "source": "./hebrew-md-to-pptx",
+      "description": "Convert Hebrew or mixed Hebrew/English slide-Markdown into an RTL-aware PowerPoint .pptx skeleton.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Assaf Tzur-El",
+        "email": "assaf@tzurel.co.il"
+      },
+      "category": "productivity",
+      "tags": ["hebrew", "rtl", "markdown", "pptx", "powerpoint", "slides"]
+    },
+    {
+      "name": "pptx-to-slide-md",
+      "source": "./pptx-to-slide-md",
+      "description": "Extract an existing PowerPoint .pptx back into slide-structured Markdown; inverse of hebrew-md-to-pptx, so a deck can round-trip.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Assaf Tzur-El",
+        "email": "assaf@tzurel.co.il"
+      },
+      "category": "productivity",
+      "tags": ["pptx", "powerpoint", "markdown", "slides", "extract"]
+    }
+  ]
+}
