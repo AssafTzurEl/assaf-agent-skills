@@ -24,6 +24,14 @@ Paragraph direction is chosen by the *majority of strong directional characters*
 (Hebrew vs Latin). Near-even paragraphs are reported as "ambiguous" and can be
 resolved with an overrides file keyed by paragraph index:
     { "118": "rtl", "169": "ltr" }
+
+Headings are the one exception: a single heading's own text is not reliable
+(e.g. "הצהרה (declaration)" has more Latin than Hebrew letters, but it is a
+Hebrew heading with an English gloss). Instead, each heading *level* (H1, H2,
+H3, ...) gets one direction, chosen by the aggregate Hebrew/Latin character
+counts across every heading at that level in the document. All headings at
+that level then use it, even ones whose own text would individually score the
+other way. Per-heading overrides still win via the same --overrides file.
 """
 
 import argparse
@@ -65,6 +73,53 @@ def detect_direction(text, base="rtl"):
     direction = "rtl" if h >= l else "ltr"
     ambiguous = abs(h - l) / total < AMBIGUOUS_BAND
     return direction, ambiguous
+
+
+def _direction_from_counts(h, l, base="rtl"):
+    if h == 0 and l == 0:
+        return base
+    if l == 0:
+        return "rtl"
+    if h == 0:
+        return "ltr"
+    return "rtl" if h >= l else "ltr"
+
+
+def collect_headings(tokens):
+    """Recursively collect (level, text) for every heading token. Headings
+    normally live at the top level, but this also walks into block_quote
+    children in case a heading ever appears nested there."""
+    headings = []
+
+    def walk(toks):
+        for tok in toks or []:
+            t = tok.get("type")
+            if t == "heading":
+                level = tok["attrs"]["level"]
+                text = inline_text(tok["children"])
+                headings.append((level, text))
+                continue
+            children = tok.get("children")
+            if children:
+                walk(children)
+
+    walk(tokens)
+    return headings
+
+
+def heading_level_directions(tokens):
+    """One direction per heading level (H1, H2, ...), chosen by the *aggregate*
+    Hebrew/Latin character counts across all headings at that level - not each
+    heading's own text. This keeps a heading level consistently RTL (or LTR)
+    even when one heading happens to contain more English glyphs than Hebrew
+    ones, e.g. a Hebrew term followed by an English gloss in parentheses like
+    "הצהרה (declaration)"."""
+    totals = {}
+    for level, text in collect_headings(tokens):
+        h, l = counts(text)
+        th, tl = totals.get(level, (0, 0))
+        totals[level] = (th + h, tl + l)
+    return {level: _direction_from_counts(h, l) for level, (h, l) in totals.items()}
 
 
 def _char_dir(ch):
@@ -287,8 +342,13 @@ class Converter:
 
     def render_heading(self, tok):
         level = tok["attrs"]["level"]
-        text = inline_text(tok["children"])
-        direction = self.direction_for(text, self.overrides)
+        idx = self.para_index
+        ovr = self.overrides.get(str(idx))
+        if ovr in ("rtl", "ltr"):
+            direction = ovr
+        else:
+            direction = self.heading_directions.get(level, "rtl")
+        self.para_index += 1
         p = self.doc.add_paragraph(style=f"Heading {min(level, 9)}")
         set_paragraph_direction(p, direction == "rtl")
         render_inline(p, tok["children"])
@@ -511,6 +571,7 @@ def convert(md_path, out_path, overrides, code_font, template=None):
     ensure_numbering(doc)
     conv = Converter(doc)
     conv.overrides = overrides
+    conv.heading_directions = heading_level_directions(tokens)
     conv.numbering_el = doc.part.numbering_part.element
     conv.next_num_id = 2000
     conv.render_blocks(tokens)

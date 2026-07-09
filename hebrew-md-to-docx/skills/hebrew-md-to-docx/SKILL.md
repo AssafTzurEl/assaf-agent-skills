@@ -9,7 +9,7 @@ description: >-
   code, fenced code blocks, tables, blockquotes, and ordered/unordered lists, and
   sets per-paragraph text direction automatically.
 metadata:
-  version: 1.0.0
+  version: 1.0.1
   author: Assaf Tzur-El
 ---
 
@@ -60,13 +60,12 @@ template. The converter is template-agnostic: it supplies its own list numbering
 and table borders, and only relies on `Normal`, `Heading 1..9`, and `Quote`,
 which every Word template has — so any template works without missing-style errors.
 
-### When running this skill, first ask the user:
+### Running this skill
 
-> Do you want to provide a custom .docx template (a blank doc saved from your Word
-> default template) so the output matches your styles/fonts? Otherwise I'll use
-> the bundled default.
-
-If they provide one, pass it via `--template`.
+Just run the converter with no `--template` flag — the bundled default is used
+automatically, no need to ask the user first. Only pass `--template path.docx`
+if the user explicitly asks for a different template (e.g. "use my company's
+Word template" or provides their own .docx to match).
 
 ## Direction logic (heuristic first, AI for ties)
 
@@ -74,6 +73,17 @@ Each paragraph's base direction is chosen by the **majority of strong directiona
 characters** (Hebrew vs Latin), not by the first character — so "Claude הוא כלי
 בינה מלאכותית" is correctly RTL. When the counts are near-even (within 20%) the
 script picks a direction but prints the paragraph to stderr as **ambiguous**:
+
+**Headings are the one exception.** A single heading's own text is not a
+reliable signal — e.g. `### הצהרה (declaration)` has more Latin than Hebrew
+letters, but it's a Hebrew heading with an English gloss in parentheses. So
+each heading *level* (H1, H2, H3, ...) gets one direction, chosen by the
+aggregate Hebrew/Latin character count across every heading at that level in
+the document. All headings at that level use it, even ones whose own text
+would individually score the other way. This assumes each level is
+predominantly one language; if a document genuinely mixes fully-Hebrew and
+fully-English headings at the same level, use `--overrides` to fix the
+minority ones by paragraph index.
 
 ```
 2 ambiguous paragraph(s) ... Resolve via --overrides (index -> rtl/ltr):
