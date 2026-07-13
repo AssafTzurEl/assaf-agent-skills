@@ -12,7 +12,7 @@ description: >-
   embedded images, and per-paragraph text direction. The output is intentionally
   unstyled, ready to be themed afterwards by hand or with the pptx skill.
 metadata:
-  version: 1.0.0
+  version: 1.0.1
   author: Assaf Tzur-El
 ---
 
@@ -56,11 +56,10 @@ Slide size: without a template the deck is **16:9 widescreen** (13.33"×7.5"), a
 the title/body placeholders are widened to fill it. With `--template`, the
 template's own slide size and layouts are kept as-is.
 
-### When running this skill, first ask the user:
-
-> Do you want to provide a custom .pptx template (a deck with your theme, fonts,
-> and layouts) so the output matches your style? Otherwise I'll use the plain
-> default theme, since the output is meant to be styled afterwards anyway.
+By default, run the converter without `--template` — it uses python-pptx's
+plain default theme, since the output is meant to be styled afterwards anyway.
+Only use `--template DECK.pptx` if the user explicitly asks for a specific
+template, theme, fonts, or layouts to be applied.
 
 ## Input format
 
