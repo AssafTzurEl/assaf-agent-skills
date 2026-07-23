@@ -6,10 +6,11 @@ description: >-
   Hebrew or mixed Hebrew/English .md file into a Word document, or complains that
   pasting Markdown into Word/Google Docs breaks right-to-left alignment, flips
   inline code, or mangles numbered lists. Handles headings, bold/italic, inline
-  code, fenced code blocks, tables, blockquotes, and ordered/unordered lists, and
-  sets per-paragraph text direction automatically.
+  code, fenced code blocks, tables, blockquotes, ordered/unordered lists, clickable
+  hyperlinks, and centered images with captions, and sets per-paragraph text
+  direction automatically.
 metadata:
-  version: 1.0.1
+  version: 1.1.0
   author: Assaf Tzur-El
 ---
 
@@ -70,20 +71,38 @@ Word template" or provides their own .docx to match).
 ## Direction logic (heuristic first, AI for ties)
 
 Each paragraph's base direction is chosen by the **majority of strong directional
-characters** (Hebrew vs Latin), not by the first character — so "Claude הוא כלי
-בינה מלאכותית" is correctly RTL. When the counts are near-even (within 20%) the
-script picks a direction but prints the paragraph to stderr as **ambiguous**:
+words** (Hebrew vs Latin), not by the first character — so "Claude הוא כלי בינה
+מלאכותית" is correctly RTL. When the counts are near-even (within 20%) the script
+picks a direction but prints the paragraph to stderr as **ambiguous**:
 
-**Headings are the one exception.** A single heading's own text is not a
-reliable signal — e.g. `### הצהרה (declaration)` has more Latin than Hebrew
-letters, but it's a Hebrew heading with an English gloss in parentheses. So
-each heading *level* (H1, H2, H3, ...) gets one direction, chosen by the
-aggregate Hebrew/Latin character count across every heading at that level in
-the document. All headings at that level use it, even ones whose own text
-would individually score the other way. This assumes each level is
-predominantly one language; if a document genuinely mixes fully-Hebrew and
-fully-English headings at the same level, use `--overrides` to fix the
-minority ones by paragraph index.
+**Words, not characters.** Counting *words* (maximal runs of one script) instead
+of characters keeps a Hebrew paragraph RTL even when its English is a few long or
+repeated proper nouns. For example "אנחנו נשתמש ב-Visual Studio Community –
+המהדורה החינמית והמלאה של Visual Studio…" has slightly more Latin *letters* than
+Hebrew (long, repeated "Visual Studio"), which would wrongly flip it LTR by
+character count; by word count the Hebrew prose clearly wins, so it stays RTL.
+
+**URLs and e-mails are excluded.** A URL or e-mail address is data, not prose, and
+its characters must not sway direction. They are stripped before counting, so a
+labelled link line like "**הורדה**: https://visualstudio.microsoft.com/vs/…" is
+driven by the Hebrew label and stays RTL instead of being dragged LTR by the URL.
+
+**Headings are a further exception.** A single heading's own text is not a
+reliable signal — e.g. `### הצהרה (declaration)` is a Hebrew heading with an
+English gloss. So each heading *level* (H1, H2, H3, ...) gets one direction,
+chosen by the aggregate Hebrew/Latin **word** count across every heading at that
+level in the document. All headings at that level use it, even ones whose own text
+would individually score the other way. This assumes each level is predominantly
+one language; if a document genuinely mixes fully-Hebrew and fully-English
+headings at the same level, use `--overrides` to fix the minority ones by
+paragraph index.
+
+**Lists share one direction, like heading levels.** All items in a list get a
+single base direction from the aggregate word count of the whole list, so short
+items that individually score LTR — a Hebrew label followed by a technical term,
+e.g. "מקש Ctrl+F5" or "תפריט Debug ▸ Start Without Debugging" — align RTL with
+their Hebrew siblings instead of coming out ragged. A genuinely mixed list can be
+corrected per item with `--overrides`.
 
 ```
 2 ambiguous paragraph(s) ... Resolve via --overrides (index -> rtl/ltr):
@@ -108,7 +127,50 @@ then re-run with `--overrides overrides.json`. Most documents need none.
   when between two LTR characters (so "format string" stays together); otherwise
   they join the Hebrew flow (so the parens/quotes/dashes around English stay on
   the Hebrew side). Digits are LTR so numbers like 1920 never reverse.
-- No Unicode control characters are inserted; nothing visible is added.
+- "Word-joiner" symbols (`+`, `#`, `*`, `.`, `\`, `/`, `!`, `?`) that touch a
+  Latin letter/digit are kept on the Latin side, so tech tokens and embedded
+  English phrases stay intact: `C++`/`C#` don't flip to `++C`/`#C`; `.NET`,
+  `Node.js`, `*.txt`, `3.14` hold together; paths/URLs like `C:\Users\foo`,
+  `/home/assaf`, `https://x/y` read left-to-right as one unit; and the `!`/`?` of
+  an embedded English exclamation stays put (`"Hello, World!"` keeps its `!`). A
+  joiner sitting at the boundary between the Latin run and the surrounding Hebrew
+  is anchored with an invisible LRM (`U+200E`) so the bidi algorithm can't drag it
+  across. A joiner that touches no Latin character (a lone `+` between Hebrew
+  words, `/` in a Hebrew `כן/לא`, the `?` in a Hebrew `נתקעתם?`) is left alone.
+  The dot is a special case: because it is also the sentence period, it joins a
+  token only when a Latin letter/digit *follows* it (as in `.NET`, `file.txt`), so
+  a period ending a Hebrew sentence — even after an English word or number, like
+  `Visual Studio.` or `123.` — correctly stays in the RTL flow.
+- An ellipsis (`...` or a spaced `. . .`) next to an English phrase stays with it
+  (`"…this window . . ."` keeps the dots at the end); a Hebrew-side ellipsis is
+  left in the RTL flow.
+- The LRM anchor above is the only inserted control character — zero-width, it
+  never renders as a glyph; nothing else visible is added.
+
+## Links
+
+A Markdown link `[text](url)` — and a bare URL that the parser auto-links — becomes
+a real, clickable Word hyperlink (an external relationship plus the built-in
+`Hyperlink` character style, blue and underlined, created if the template lacks
+it). The visible text keeps normal bidi splitting, so a URL stays LTR while a
+Hebrew link label stays RTL. A labelled line like `**הורדה**: https://…` is driven
+RTL by the Hebrew label (URLs are excluded from direction counting, see above)
+while the URL itself is left-to-right and clickable.
+
+## Images
+
+A standalone image (`![alt text](path/to/img.png)` on its own line) is embedded
+as a centered picture. If it is wider than the page's content area (page width
+minus margins) it is scaled down proportionally to fit; smaller images keep their
+native size. The **alt text becomes a centered caption** directly below the image,
+using Word's `Caption` paragraph style (a smaller italic style, created
+automatically if the template lacks one). Caption direction (RTL/LTR) follows the
+same Hebrew/Latin majority rule as body text.
+
+Image `src` paths are resolved relative to the input `.md` file's folder, so a
+reference like `Assets/setup.png` works as long as the assets sit beside the
+Markdown. If a file can't be found or read, a visible `[missing image: …]`
+placeholder is inserted and the problem is reported to stderr instead of aborting.
 
 ## What gets converted
 
@@ -120,11 +182,18 @@ then re-run with `--overrides overrides.json`. Most documents need none.
 | ```` ``` ```` fenced blocks | LTR monospace lines (`Code` style) |
 | tables | RTL table (`bidiVisual`) with its own borders, bold header row |
 | `>` blockquotes | built-in `Quote` style |
-| `1.` / `-` lists | self-contained numbering (each list restarts at 1), RTL-aware |
+| `1.` / `-` lists | self-contained numbering (each list restarts at 1), one shared direction per list, bullets render in both directions |
+| `[text](url)` / bare URLs | clickable Word hyperlink (`Hyperlink` style, blue + underlined) |
+| `![alt](src)` images | centered picture (scaled to fit page width), alt text as a centered `Caption` below it |
 
 ## Limitations
 
 - Nested / multi-level lists render at a single level.
-- Images and raw inline HTML are skipped.
+- Raw inline HTML is skipped.
+- Only standalone images (a `![alt](src)` on its own line) become centered image
+  blocks with captions. An image sitting inline within a text paragraph falls back
+  to rendering just its alt text. Image paths are resolved relative to the input
+  `.md` file's folder; a missing/unreadable image is replaced with a visible
+  `[missing image: …]` placeholder and reported to stderr.
 - Tuned for Hebrew-dominant content; primarily-English docs still convert but the
   base direction is RTL.

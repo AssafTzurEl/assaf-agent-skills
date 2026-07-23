@@ -1,6 +1,7 @@
 # Packaged skill artifacts (built by CI or locally)
 dist/
 *.skill
+Temp/
 
 # Python
 __pycache__/

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-plugin.json",
   "name": "hebrew-md-to-docx",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Convert Hebrew or mixed Hebrew/English Markdown into a properly formatted, RTL-aware Word .docx (per-paragraph direction, correct bidi for inline code, numbers, and punctuation).",
   "author": {
     "name": "Assaf Tzur-El",

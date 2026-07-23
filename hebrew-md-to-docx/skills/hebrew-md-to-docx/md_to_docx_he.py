@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""
+r"""
 Hebrew Markdown -> Word (.docx) converter, RTL-aware.
 
 Usage:
@@ -18,20 +18,37 @@ Design principles
   two LTR characters (so "format string" stays together); otherwise they join
   the RTL/Hebrew flow (so the parens/quotes/dashes around English stay on the
   Hebrew side). Digits are treated as LTR so numbers like 1920 never reverse.
-* No Unicode control characters are inserted; nothing visible is added.
+* "Word-joiner" symbols (+, #, *, ., \, /, !, ?) that touch a Latin letter/digit
+  are kept on the Latin side so tech tokens (C++, C#, .NET, *.txt), paths/URLs
+  (C:\Users\foo, /home/assaf, https://x/y), embedded English exclamations
+  ("Hello, World!") and ellipses ("... . . .") stay intact; a joiner at an LTR/RTL
+  boundary is anchored with an invisible LRM (the only inserted control character
+  - zero-width, never a glyph). The dot is forward-only so a sentence period is
+  never captured.
+* Markdown links and bare URLs become clickable Word hyperlinks ("Hyperlink"
+  character style). Lists share one base direction across all their items (like
+  heading levels), and bullets are font-agnostic so they render in LTR and RTL.
+* A standalone image (`![alt](src)` on its own line) is embedded centered and
+  scaled to fit the page's content width, with the alt text as a centered
+  caption (Word "Caption" style) below it. Paths resolve relative to the input
+  file; a missing image becomes a visible "[missing image: ...]" placeholder.
 
-Paragraph direction is chosen by the *majority of strong directional characters*
-(Hebrew vs Latin). Near-even paragraphs are reported as "ambiguous" and can be
-resolved with an overrides file keyed by paragraph index:
+Paragraph direction is chosen by the *majority of strong directional words*
+(Hebrew vs Latin), after stripping URLs/e-mails. Counting words rather than
+characters keeps a Hebrew paragraph RTL when its English is only a few long or
+repeated proper nouns (e.g. "Visual Studio" several times), and dropping URLs
+keeps a labelled link line ("הורדה: https://...") from being pulled LTR by the
+URL. Near-even paragraphs are reported as "ambiguous" and can be resolved with an
+overrides file keyed by paragraph index:
     { "118": "rtl", "169": "ltr" }
 
-Headings are the one exception: a single heading's own text is not reliable
+Headings are a further exception: a single heading's own text is not reliable
 (e.g. "הצהרה (declaration)" has more Latin than Hebrew letters, but it is a
 Hebrew heading with an English gloss). Instead, each heading *level* (H1, H2,
-H3, ...) gets one direction, chosen by the aggregate Hebrew/Latin character
-counts across every heading at that level in the document. All headings at
-that level then use it, even ones whose own text would individually score the
-other way. Per-heading overrides still win via the same --overrides file.
+H3, ...) gets one direction, chosen by the aggregate Hebrew/Latin word counts
+across every heading at that level in the document. All headings at that level
+then use it, even ones whose own text would individually score the other way.
+Per-heading overrides still win via the same --overrides file.
 """
 
 import argparse
@@ -43,8 +60,11 @@ import sys
 import mistune
 from docx import Document
 from docx.enum.style import WD_STYLE_TYPE
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.opc.constants import RELATIONSHIP_TYPE as RT
 from docx.oxml import OxmlElement
 from docx.oxml.ns import nsmap, qn
+from docx.shared import Pt, RGBColor
 
 # ---------------------------------------------------------------------------
 # Direction detection
@@ -53,11 +73,32 @@ from docx.oxml.ns import nsmap, qn
 HEB_RE = re.compile(r"[֐-׿יִ-ﭏ]")
 LAT_RE = re.compile(r"[A-Za-zÀ-ɏ]")
 
+# Word-level patterns (maximal runs of one script) for base-direction detection.
+# Direction is decided by counting *words*, not characters, so a Hebrew sentence
+# that embeds long or repeated English proper nouns (e.g. "Visual Studio" several
+# times) is not dragged LTR just because those tokens are long.
+HEB_WORD_RE = re.compile(r"[֐-׿יִ-ﭏ]+")
+LAT_WORD_RE = re.compile(r"[A-Za-zÀ-ɏ]+")
+
+# URLs and e-mail addresses are data, not prose: their many Latin characters (and
+# the "words" a URL splits into) must not sway a paragraph's base direction, so
+# they are removed before counting. Without this a labelled link line such as
+# "הורדה: https://visualstudio.microsoft.com/vs/community/" would be counted as
+# mostly-Latin and wrongly set LTR.
+URL_RE = re.compile(
+    r"(?:https?://|ftp://|www\.)\S+|\b[\w.+-]+@[\w-]+\.[^\s,;]+", re.I)
+
 AMBIGUOUS_BAND = 0.20  # |heb-lat|/total below this -> flag for human review
 
 
 def counts(text):
-    return len(HEB_RE.findall(text)), len(LAT_RE.findall(text))
+    """(Hebrew words, Latin words) after stripping URLs/e-mails. Counting words
+    rather than characters keeps a Hebrew paragraph RTL when its only Latin is a
+    handful of (possibly long, possibly repeated) proper nouns; the Hebrew prose
+    that carries the grammar normally outnumbers them. A genuine tie that comes
+    out wrong is still fixable with --overrides."""
+    clean = URL_RE.sub(" ", text)
+    return len(HEB_WORD_RE.findall(clean)), len(LAT_WORD_RE.findall(clean))
 
 
 def detect_direction(text, base="rtl"):
@@ -122,6 +163,33 @@ def heading_level_directions(tokens):
     return {level: _direction_from_counts(h, l) for level, (h, l) in totals.items()}
 
 
+# Symbols that are neutral in the Unicode bidi sense but, in tech writing, are
+# glued to a Latin token and must stay with it rather than drift into the RTL
+# flow - e.g. the "++"/"#" in C++/C#, the dot in .NET / Node.js, the star in a
+# glob like *.txt, the slashes in a path/URL like C:\Users\foo, /home/assaf,
+# https://x/y, or the "!"/"?" ending an embedded English phrase ("Hello, World!").
+# They are promoted to LTR only when a run of them actually touches a Latin
+# letter/digit (see split_runs).
+JOIN_LTR = set("+#\\/*.!?")
+
+# The dot is special: it is also the sentence period. A period ending a Hebrew
+# sentence ("... Visual Studio." or "יש 123.") must stay in the RTL flow, so a dot
+# joins a Latin token only when a Latin letter/digit FOLLOWS it (as in .NET,
+# file.txt, 3.14) - never on a trailing dot that a space or line end follows.
+# ("!" and "?" are not forward-only: they legitimately end an English phrase, so
+# they attach backwards to Latin, but only when directly adjacent - a Hebrew
+# "נתקעתם?" has no adjacent Latin and stays RTL.)
+JOIN_FORWARD_ONLY = set(".")
+
+# Left-to-right mark: an invisible (zero-width) strong-L character used to anchor
+# a trailing/leading joiner symbol to the Latin side. Without it, a "++" ending a
+# Latin token sits between the token (L) and a following RTL run and the bidi
+# algorithm resolves it to the RTL base, flipping "C++" to "++C". The LRM gives
+# the joiner a strong-L neighbour so it stays put. It is the only inserted control
+# character and never renders as a glyph.
+LRM = "‎"
+
+
 def _char_dir(ch):
     if HEB_RE.match(ch):
         return "rtl"
@@ -137,28 +205,75 @@ def split_runs(text):
     it belongs to the RTL (Hebrew) flow. This keeps English phrases like
     "format string" together while parentheses/quotes/dashes around them stay
     on the Hebrew side.
+
+    Exception: "word-joiner" symbols in JOIN_LTR (the "++" of C++, the "#" of C#,
+    the dot of .NET/Node.js, the star of *.txt, the slashes of a path/URL) are
+    promoted to LTR whenever a contiguous run of them reaches a Latin letter/digit,
+    so the token stays intact instead of the trailing symbols flipping to the
+    Hebrew side at a token boundary. Most joiners qualify on reaching Latin on
+    either side; the dot (JOIN_FORWARD_ONLY) qualifies only when Latin FOLLOWS it,
+    so a sentence period is never captured. A joiner that touches no Latin
+    character (e.g. "+" alone between Hebrew words, or "/" in a Hebrew "כן/לא")
+    keeps the normal neutral treatment. A joiner sitting at the edge of an LTR run
+    (facing an RTL run or the run boundary) is additionally anchored with an
+    invisible LRM so the bidi algorithm cannot pull it across the boundary.
     """
     if not text:
         return []
+    n = len(text)
+    base_cls = [_char_dir(ch) for ch in text]
+
+    def _reaches_ltr(i, step):
+        j = i + step
+        while 0 <= j < n and text[j] in JOIN_LTR:
+            j += step
+        return 0 <= j < n and base_cls[j] == "ltr"
+
+    cls = list(base_cls)
+    for i, ch in enumerate(text):
+        if ch in JOIN_LTR and cls[i] == "neutral":
+            forward = _reaches_ltr(i, 1)
+            reachable = forward if ch in JOIN_FORWARD_ONLY \
+                else (forward or _reaches_ltr(i, -1))
+            if reachable:
+                cls[i] = "ltr"
+
+    # An ellipsis ("..." or ". . ." with spaces) next to a Latin phrase belongs to
+    # it, not the RTL flow. The dots are forward-only above, so a trailing ". . ."
+    # is not caught there; promote a run of >=2 dots when the nearest non-space
+    # neighbour on either side is Latin/digit (spaces are skipped so
+    # "window . . ." counts; a Hebrew "רגע . . ." has no Latin neighbour and stays).
+    for mt in re.finditer(r"\.(?:[ ]*\.)+", text):
+        a, b = mt.start(), mt.end()
+        li = a - 1
+        while li >= 0 and text[li] == " ":
+            li -= 1
+        ri = b
+        while ri < n and text[ri] == " ":
+            ri += 1
+        if (li >= 0 and base_cls[li] == "ltr") or (ri < n and base_cls[ri] == "ltr"):
+            for k in range(a, b):
+                if text[k] == ".":
+                    cls[k] = "ltr"
+
     atoms = []  # [segment, dir]
     cur, cur_cls = [], None
-    for ch in text:
-        cls = _char_dir(ch)
-        if cur_cls is None or cls == cur_cls:
+    for ch, c in zip(text, cls):
+        if cur_cls is None or c == cur_cls:
             cur.append(ch)
-            cur_cls = cls
+            cur_cls = c
         else:
             atoms.append(["".join(cur), cur_cls])
-            cur, cur_cls = [ch], cls
+            cur, cur_cls = [ch], c
     atoms.append(["".join(cur), cur_cls])
 
-    n = len(atoms)
+    m = len(atoms)
     for i, atom in enumerate(atoms):
         if atom[1] != "neutral":
             continue
         prev_dir = next((atoms[j][1] for j in range(i - 1, -1, -1)
                          if atoms[j][1] != "neutral"), None)
-        next_dir = next((atoms[j][1] for j in range(i + 1, n)
+        next_dir = next((atoms[j][1] for j in range(i + 1, m)
                          if atoms[j][1] != "neutral"), None)
         atom[1] = "ltr" if (prev_dir == "ltr" and next_dir == "ltr") else "rtl"
 
@@ -168,6 +283,18 @@ def split_runs(text):
             merged[-1][0] += seg
         else:
             merged.append([seg, d])
+
+    # Anchor edge joiners. A merged LTR run only ever borders RTL runs or the
+    # text boundary (same-direction runs were already merged), so a joiner symbol
+    # at its start or end faces a pull toward the RTL flow. Bracket it with an LRM
+    # so it stays on the Latin side (keeps "C++", "C:\path\", ".../y" intact).
+    for run in merged:
+        if run[1] != "ltr":
+            continue
+        if run[0] and run[0][-1] in JOIN_LTR:
+            run[0] += LRM
+        if run[0] and run[0][0] in JOIN_LTR:
+            run[0] = LRM + run[0]
     return [(s, d) for s, d in merged]
 
 
@@ -222,10 +349,12 @@ def _ordered_rPr(children):
     return rPr
 
 
-def add_run(paragraph, text, *, bold=False, italic=False, rtl=False, style=None):
+def add_run(paragraph, text, *, bold=False, italic=False, rtl=False, style=None,
+            container=None):
     """Add a run. A w:rtl element is written only for RTL (Hebrew) runs; LTR
     runs omit it, exactly as Word itself does (Latin/digits resolve LTR under
-    the RTL paragraph base on their own)."""
+    the RTL paragraph base on their own). When `container` is given (e.g. a
+    w:hyperlink element) the run is appended there instead of to the paragraph."""
     r = OxmlElement("w:r")
     children = []
     if style:
@@ -245,14 +374,14 @@ def add_run(paragraph, text, *, bold=False, italic=False, rtl=False, style=None)
     t.set(qn("xml:space"), "preserve")
     t.text = text
     r.append(t)
-    paragraph._p.append(r)
+    (paragraph._p if container is None else container).append(r)
     return r
 
 
-def add_break(paragraph):
+def add_break(paragraph, container=None):
     r = OxmlElement("w:r")
     r.append(OxmlElement("w:br"))
-    paragraph._p.append(r)
+    (paragraph._p if container is None else container).append(r)
 
 
 # ---------------------------------------------------------------------------
@@ -267,36 +396,65 @@ def inline_text(tokens):
             out.append(tok.get("raw", ""))
         elif t == "codespan":
             out.append(tok.get("raw", ""))
-        elif t in ("strong", "emphasis", "link", "strikethrough"):
+        elif t in ("strong", "emphasis", "link", "strikethrough", "image"):
             out.append(inline_text(tok.get("children")))
         elif t in ("softbreak", "linebreak"):
             out.append(" ")
     return "".join(out)
 
 
-def render_inline(paragraph, tokens, bold=False, italic=False):
+def render_inline(paragraph, tokens, bold=False, italic=False, container=None,
+                  style=None):
     for tok in tokens or []:
         t = tok.get("type")
         if t == "text":
             for seg, d in split_runs(tok.get("raw", "")):
                 add_run(paragraph, seg, bold=bold, italic=italic,
-                        rtl=(d == "rtl"))
+                        rtl=(d == "rtl"), style=style, container=container)
         elif t == "strong":
-            render_inline(paragraph, tok.get("children"), bold=True, italic=italic)
+            render_inline(paragraph, tok.get("children"), bold=True, italic=italic,
+                          container=container, style=style)
         elif t == "emphasis":
-            render_inline(paragraph, tok.get("children"), bold=bold, italic=True)
+            render_inline(paragraph, tok.get("children"), bold=bold, italic=True,
+                          container=container, style=style)
         elif t == "strikethrough":
-            render_inline(paragraph, tok.get("children"), bold=bold, italic=italic)
+            render_inline(paragraph, tok.get("children"), bold=bold, italic=italic,
+                          container=container, style=style)
         elif t == "codespan":
             # monospace + LTR run; no control chars, so it never reorders
             add_run(paragraph, tok.get("raw", ""), bold=bold, italic=italic,
-                    rtl=False, style="Code")
+                    rtl=False, style="Code", container=container)
         elif t == "link":
-            render_inline(paragraph, tok.get("children"), bold=bold, italic=italic)
+            render_link(paragraph, tok, bold, italic, container)
+        elif t == "image":
+            # Inline image (embedded mid-text): fall back to rendering its alt
+            # text. Standalone images on their own line are handled as centered
+            # image blocks in render_block instead.
+            render_inline(paragraph, tok.get("children"), bold=bold, italic=italic,
+                          container=container, style=style)
         elif t == "linebreak":
-            add_break(paragraph)
+            add_break(paragraph, container=container)
         elif t == "softbreak":
-            add_run(paragraph, " ")
+            add_run(paragraph, " ", container=container)
+
+
+def render_link(paragraph, tok, bold, italic, container=None):
+    """Render a Markdown link (including an auto-linked bare URL) as a real,
+    clickable Word hyperlink: an external relationship + a w:hyperlink wrapping the
+    link's text runs, styled with the built-in 'Hyperlink' character style. The
+    visible text keeps normal bidi run-splitting, so a URL stays LTR and a Hebrew
+    link label stays RTL."""
+    url = (tok.get("attrs") or {}).get("url", "")
+    if not url:
+        render_inline(paragraph, tok.get("children"), bold=bold, italic=italic,
+                      container=container)
+        return
+    r_id = paragraph.part.relate_to(url, RT.HYPERLINK, is_external=True)
+    hyper = OxmlElement("w:hyperlink")
+    hyper.set(qn("r:id"), r_id)
+    render_inline(paragraph, tok.get("children"), bold=bold, italic=italic,
+                  container=hyper, style="Hyperlink")
+    (paragraph._p if container is None else container).append(hyper)
 
 
 # ---------------------------------------------------------------------------
@@ -308,13 +466,22 @@ class Converter:
         self.doc = doc
         self.para_index = 0
         self.ambiguous = []
+        self.missing_images = []
+        self.base_dir = "."
+        self.max_img_width = None
 
-    def direction_for(self, text, overrides):
+    def direction_for(self, text, overrides, force=None):
+        """Base direction for a paragraph. A per-index --overrides entry wins; then
+        a `force` direction (e.g. one shared across a whole list); otherwise the
+        per-text word-count heuristic, which flags near-even paragraphs as
+        ambiguous. When overridden or forced the paragraph is not flagged."""
         idx = self.para_index
         ovr = overrides.get(str(idx))
         direction, ambiguous = detect_direction(text, base="rtl")
         if ovr in ("rtl", "ltr"):
             direction = ovr
+        elif force in ("rtl", "ltr"):
+            direction = force
         elif ambiguous:
             self.ambiguous.append((idx, direction, text[:60]))
         self.para_index += 1
@@ -329,7 +496,11 @@ class Converter:
         if t == "heading":
             self.render_heading(tok)
         elif t in ("paragraph", "block_text"):
-            self.render_paragraph(tok, para_style)
+            image = self._lone_image(tok)
+            if image is not None:
+                self.render_image_block(image)
+            else:
+                self.render_paragraph(tok, para_style)
         elif t == "block_code":
             self.render_code_block(tok)
         elif t == "block_quote":
@@ -353,13 +524,66 @@ class Converter:
         set_paragraph_direction(p, direction == "rtl")
         render_inline(p, tok["children"])
 
-    def render_paragraph(self, tok, para_style=None):
+    def render_paragraph(self, tok, para_style=None, force_dir=None):
         text = inline_text(tok["children"])
-        direction = self.direction_for(text, self.overrides)
+        direction = self.direction_for(text, self.overrides, force=force_dir)
         p = self.doc.add_paragraph(style=para_style)
         set_paragraph_direction(p, direction == "rtl")
         render_inline(p, tok["children"])
         return p
+
+    @staticmethod
+    def _lone_image(tok):
+        """Return the image token if this paragraph is a single standalone image
+        (the `![alt](src)` on its own line case), else None. Whitespace-only text
+        and soft/hard breaks around the image are ignored; any real text alongside
+        the image makes it an inline image, not a block."""
+        children = tok.get("children") or []
+        images = [c for c in children if c.get("type") == "image"]
+        if len(images) != 1:
+            return None
+        for c in children:
+            ct = c.get("type")
+            if ct == "image" or ct in ("softbreak", "linebreak"):
+                continue
+            if ct == "text" and not (c.get("raw") or "").strip():
+                continue
+            return None  # real content beside the image -> treat as inline
+        return images[0]
+
+    def render_image_block(self, image_tok):
+        """Render a standalone image centered, scaled down to the page's content
+        width if larger, with the alt text as a centered caption below it."""
+        self.para_index += 1  # keep --overrides paragraph indices stable
+        src = (image_tok.get("attrs") or {}).get("url", "")
+        path = src
+        if path and not os.path.isabs(path):
+            path = os.path.normpath(os.path.join(self.base_dir, path))
+
+        p = self.doc.add_paragraph()
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        if src and os.path.exists(path):
+            try:
+                pic = p.add_run().add_picture(path)
+                if self.max_img_width and pic.width > self.max_img_width:
+                    ratio = self.max_img_width / pic.width
+                    pic.width = int(self.max_img_width)
+                    pic.height = int(pic.height * ratio)
+            except Exception as e:  # unreadable/corrupt image: don't abort
+                add_run(p, f"[image error: {src}]", rtl=False)
+                self.missing_images.append((src, str(e)))
+        else:
+            add_run(p, f"[missing image: {src}]", rtl=False)
+            self.missing_images.append((src, "file not found"))
+
+        cap_text = inline_text(image_tok.get("children"))
+        if cap_text.strip():
+            style = "Caption" if "Caption" in (s.name for s in self.doc.styles) else None
+            cap = self.doc.add_paragraph(style=style)
+            cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            direction, _ = detect_direction(cap_text, base="rtl")
+            set_paragraph_direction(cap, direction == "rtl")
+            render_inline(cap, image_tok.get("children"))
 
     def render_code_block(self, tok):
         raw = tok.get("raw", "").rstrip("\n")
@@ -395,14 +619,39 @@ class Converter:
         self.numbering_el.append(num)
         return nid
 
+    @staticmethod
+    def _list_direction(tok):
+        """One base direction for a whole list, from the aggregate word count of
+        all its items (like heading levels). A Hebrew instruction list whose short
+        items lead with a Hebrew label but are dominated per-item by a technical
+        term - "מקש Ctrl+F5", "תפריט Debug ▸ Start Without Debugging" - would each
+        score LTR alone; aggregated with their Hebrew siblings the list reads RTL,
+        so the items align consistently. --overrides still fixes a genuine outlier."""
+        h = l = 0
+        stack = list(tok.get("children", []))
+        while stack:
+            node = stack.pop()
+            for child in node.get("children", []) or []:
+                ct = child.get("type")
+                if ct in ("block_text", "paragraph"):
+                    hh, ll = counts(inline_text(child.get("children")))
+                    h += hh
+                    l += ll
+                elif ct in ("list", "list_item"):
+                    stack.append(child)
+        return _direction_from_counts(h, l)
+
     def render_list(self, tok):
         ordered = tok["attrs"].get("ordered", False)
         num_id = self._new_num(ordered)
+        list_dir = self._list_direction(tok)
         for item in tok.get("children", []):
             first = True
             for child in item.get("children", []):
                 if child.get("type") in ("block_text", "paragraph"):
-                    p = self.render_paragraph(child, para_style=list_paragraph_style(self.doc))
+                    p = self.render_paragraph(
+                        child, para_style=list_paragraph_style(self.doc),
+                        force_dir=list_dir)
                     if first:
                         apply_numbering(p, num_id)
                         first = False
@@ -463,6 +712,32 @@ def ensure_code_style(doc, code_font):
     rFonts.set(qn("w:ascii"), code_font)
 
 
+def ensure_caption_style(doc):
+    """Provide a 'Caption' paragraph style for image captions. If the template
+    already defines one (built-in or custom), leave it alone; otherwise create a
+    Word-like Caption: smaller, italic, subdued color, based on Normal."""
+    if "Caption" in (s.name for s in doc.styles):
+        return
+    st = doc.styles.add_style("Caption", WD_STYLE_TYPE.PARAGRAPH)
+    if "Normal" in (s.name for s in doc.styles):
+        st.base_style = doc.styles["Normal"]
+    st.font.italic = True
+    st.font.size = Pt(9)
+    st.font.color.rgb = RGBColor(0x44, 0x44, 0x44)
+
+
+def ensure_hyperlink_style(doc):
+    """Provide a 'Hyperlink' character style (blue + underlined) for links, unless
+    the template already defines one. Word's built-in name is 'Hyperlink'."""
+    if "Hyperlink" in (s.name for s in doc.styles):
+        return
+    st = doc.styles.add_style("Hyperlink", WD_STYLE_TYPE.CHARACTER)
+    if "Default Paragraph Font" in (s.name for s in doc.styles):
+        st.base_style = doc.styles["Default Paragraph Font"]
+    st.font.color.rgb = RGBColor(0x05, 0x63, 0xC1)
+    st.font.underline = True
+
+
 def set_table_borders(table, color="auto", sz="4"):
     """Single borders on all sides + inside grid, without depending on the
     'Table Grid' style (which may be absent from a custom template)."""
@@ -502,7 +777,6 @@ _NUMBERING_XML = f"""<w:numbering xmlns:w="{nsmap['w']}">
       <w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="•"/>
       <w:lvlJc w:val="left"/>
       <w:pPr><w:ind w:start="720" w:hanging="360"/></w:pPr>
-      <w:rPr><w:rFonts w:ascii="Symbol" w:hAnsi="Symbol" w:hint="default"/></w:rPr>
     </w:lvl>
   </w:abstractNum>
   <w:num w:numId="{NUMID_ORDERED}"><w:abstractNumId w:val="{_ABS_ORDERED}"/></w:num>
@@ -568,12 +842,18 @@ def convert(md_path, out_path, overrides, code_font, template=None):
             template = bundled
     doc = Document(template) if template else Document()
     ensure_code_style(doc, code_font)
+    ensure_caption_style(doc)
+    ensure_hyperlink_style(doc)
     ensure_numbering(doc)
     conv = Converter(doc)
     conv.overrides = overrides
     conv.heading_directions = heading_level_directions(tokens)
     conv.numbering_el = doc.part.numbering_part.element
     conv.next_num_id = 2000
+    conv.base_dir = os.path.dirname(os.path.abspath(md_path))
+    section = doc.sections[0]
+    conv.max_img_width = (section.page_width - section.left_margin
+                          - section.right_margin)
     conv.render_blocks(tokens)
     strip_leading_empty(doc)
     doc.save(out_path)
@@ -598,6 +878,11 @@ def main():
 
     conv = convert(args.input, out, overrides, args.code_font, args.template)
     print(f"Wrote {out}")
+    if conv.missing_images:
+        print(f"\n{len(conv.missing_images)} image(s) could not be embedded "
+              f"(a visible placeholder was inserted instead):", file=sys.stderr)
+        for src, reason in conv.missing_images:
+            print(f"  {src!r}: {reason}", file=sys.stderr)
     if conv.ambiguous:
         print(f"\n{len(conv.ambiguous)} ambiguous paragraph(s) "
               f"(near-even Hebrew/Latin counts). Resolve via --overrides "
