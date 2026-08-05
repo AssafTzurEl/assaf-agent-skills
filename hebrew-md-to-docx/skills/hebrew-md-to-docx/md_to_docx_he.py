@@ -14,17 +14,23 @@ Design principles
 * Direction is set per paragraph with w:bidi (RTL paragraphs get NO explicit jc,
   so Word's default right alignment for RTL applies) and per run with w:rtl.
 * Runs are split by script and tagged RTL/LTR. Neutral characters (spaces,
-  parens, quotes, dashes, punctuation) are tagged LTR only when they sit between
-  two LTR characters (so "format string" stays together); otherwise they join
-  the RTL/Hebrew flow (so the parens/quotes/dashes around English stay on the
-  Hebrew side). Digits are treated as LTR so numbers like 1920 never reverse.
-* "Word-joiner" symbols (+, #, *, ., \, /, !, ?) that touch a Latin letter/digit
+  parens, quotes, dashes, punctuation) fall back to the *paragraph's own base
+  direction* unless both neighbours are the opposite direction: under an RTL
+  base a neutral is LTR only between two LTR characters (so "format string"
+  stays together while the parens/quotes/dashes around English stay on the
+  Hebrew side), and under an LTR base the mirror applies (so the period ending a
+  mostly-English sentence that closes with a Hebrew word stays at its end).
+  Digits are treated as LTR so numbers like 1920 never reverse.
+* "Word-joiner" symbols (+, #, *, ., \, /, !, ?, %) that touch a Latin letter/digit
   are kept on the Latin side so tech tokens (C++, C#, .NET, *.txt), paths/URLs
   (C:\Users\foo, /home/assaf, https://x/y), embedded English exclamations
   ("Hello, World!") and ellipses ("... . . .") stay intact; a joiner at an LTR/RTL
   boundary is anchored with an invisible LRM (the only inserted control character
   - zero-width, never a glyph). The dot is forward-only so a sentence period is
-  never captured.
+  never captured; the percent sign is backward-only (plus a directly-adjacent
+  Latin letter ahead) so "80%" never becomes "%80" and "%d" holds together.
+  Inline-code runs are LRM-anchored the same way when their first/last character
+  is not strongly LTR, so `%d` in a Hebrew paragraph does not come out as "d%".
 * Markdown links and bare URLs become clickable Word hyperlinks ("Hyperlink"
   character style). Lists share one base direction across all their items (like
   heading levels), and bullets are font-agnostic so they render in LTR and RTL.
@@ -70,15 +76,20 @@ from docx.shared import Pt, RGBColor
 # Direction detection
 # ---------------------------------------------------------------------------
 
-HEB_RE = re.compile(r"[֐-׿יִ-ﭏ]")
-LAT_RE = re.compile(r"[A-Za-zÀ-ɏ]")
+# NOTE: the ranges are written as \u escapes on purpose. Spelling them with
+# literal characters is fragile: the Hebrew presentation form U+FB1D decomposes
+# to U+05D9 U+05B4 under Unicode normalisation, which silently turned the class
+# into the huge range U+05B4-U+FB4F - so arrows, dashes, CJK and geometric
+# shapes (e.g. the "▸" of "Build ▸ Build Solution") all counted as Hebrew.
+HEB_RE = re.compile("[\u0590-\u05FF\uFB1D-\uFB4F]")
+LAT_RE = re.compile("[A-Za-z\u00C0-\u024F]")
 
 # Word-level patterns (maximal runs of one script) for base-direction detection.
 # Direction is decided by counting *words*, not characters, so a Hebrew sentence
 # that embeds long or repeated English proper nouns (e.g. "Visual Studio" several
 # times) is not dragged LTR just because those tokens are long.
-HEB_WORD_RE = re.compile(r"[֐-׿יִ-ﭏ]+")
-LAT_WORD_RE = re.compile(r"[A-Za-zÀ-ɏ]+")
+HEB_WORD_RE = re.compile("[\u0590-\u05FF\uFB1D-\uFB4F]+")
+LAT_WORD_RE = re.compile("[A-Za-z\u00C0-\u024F]+")
 
 # URLs and e-mail addresses are data, not prose: their many Latin characters (and
 # the "words" a URL splits into) must not sway a paragraph's base direction, so
@@ -170,7 +181,7 @@ def heading_level_directions(tokens):
 # https://x/y, or the "!"/"?" ending an embedded English phrase ("Hello, World!").
 # They are promoted to LTR only when a run of them actually touches a Latin
 # letter/digit (see split_runs).
-JOIN_LTR = set("+#\\/*.!?")
+JOIN_LTR = set("+#\\/*.!?%‰")
 
 # The dot is special: it is also the sentence period. A period ending a Hebrew
 # sentence ("... Visual Studio." or "יש 123.") must stay in the RTL flow, so a dot
@@ -180,6 +191,24 @@ JOIN_LTR = set("+#\\/*.!?")
 # they attach backwards to Latin, but only when directly adjacent - a Hebrew
 # "נתקעתם?" has no adjacent Latin and stays RTL.)
 JOIN_FORWARD_ONLY = set(".")
+
+# The percent (and per-mille) sign is the mirror case: it always trails its
+# number ("80%", "27%"), never leads it, so it joins a Latin token only when a
+# Latin letter/digit PRECEDES it. Without this it is a plain neutral, and under
+# an RTL base a "%" after a number resolves to the RTL flow and renders on the
+# wrong side ("%80" instead of "80%"). A lone "%" with no adjacent digit/letter
+# (rare, e.g. a Hebrew sentence about "סימן ה-%") keeps neutral treatment.
+JOIN_BACKWARD_ONLY = set("%‰")
+
+# "!" and "?" are the same kind of special case as the dot: they end an embedded
+# English phrase ("Hello, World!") but they *also* end the surrounding Hebrew
+# sentence ("אין לכם Windows? היחידה..." - the "?" belongs to the Hebrew question,
+# not to the word "Windows"). They attach backwards to Latin only when something
+# immediately follows them, which is what an embedded phrase looks like - a
+# closing quote/bracket or more Latin ('"Hello, World!"', "(Really?)"). When the
+# next character is a space, or the text ends there, the mark is terminating the
+# Hebrew sentence and is left in the RTL flow.
+JOIN_BACKWARD_TIGHT = set("!?")
 
 # Left-to-right mark: an invisible (zero-width) strong-L character used to anchor
 # a trailing/leading joiner symbol to the Latin side. Without it, a "++" ending a
@@ -198,13 +227,35 @@ def _char_dir(ch):
     return "neutral"
 
 
-def split_runs(text):
+def anchor_ltr(text):
+    """Bracket an LTR-only run with invisible LRMs when its first/last character
+    is not strongly LTR, so the surrounding RTL flow cannot pull that edge
+    character across. A run marked LTR still has its *neutral* characters
+    resolved by the paragraph's base direction, so inline code like `%d` (the run
+    starts with a neutral "%") comes out as "d%" inside a Hebrew paragraph
+    without this; likewise a trailing "*" or "-". Only added where needed, and
+    the LRM is zero-width so nothing visible changes."""
+    if not text:
+        return text
+    if _char_dir(text[0]) != "ltr":
+        text = LRM + text
+    if _char_dir(text[-1]) != "ltr":
+        text = text + LRM
+    return text
+
+
+def split_runs(text, base="rtl"):
     """Split text into (segment, 'rtl'|'ltr') runs, applying the Unicode bidi
-    neutral rule under an RTL base: a neutral char (space, paren, quote, dash,
-    punctuation) is LTR only when it lies between two LTR characters; otherwise
-    it belongs to the RTL (Hebrew) flow. This keeps English phrases like
-    "format string" together while parentheses/quotes/dashes around them stay
-    on the Hebrew side.
+    neutral rule under the paragraph's own base direction: a neutral char
+    (space, paren, quote, dash, punctuation) that sits between two opposite-
+    direction neighbours - or at the text edge - falls back to the base. Under
+    an RTL base a neutral is LTR only when it lies between two LTR characters,
+    so English phrases like "format string" stay together while the
+    parentheses/quotes/dashes around them stay on the Hebrew side. Under an LTR
+    base the rule mirrors: a neutral is RTL only between two RTL characters, so
+    the period ending a mostly-English sentence that happens to close with a
+    Hebrew word ("This one is 10% עברית.") stays at the sentence's end instead
+    of jumping into the Hebrew flow.
 
     Exception: "word-joiner" symbols in JOIN_LTR (the "++" of C++, the "#" of C#,
     the dot of .NET/Node.js, the star of *.txt, the slashes of a path/URL) are
@@ -212,7 +263,9 @@ def split_runs(text):
     so the token stays intact instead of the trailing symbols flipping to the
     Hebrew side at a token boundary. Most joiners qualify on reaching Latin on
     either side; the dot (JOIN_FORWARD_ONLY) qualifies only when Latin FOLLOWS it,
-    so a sentence period is never captured. A joiner that touches no Latin
+    so a sentence period is never captured; the percent sign
+    (JOIN_BACKWARD_ONLY) qualifies only when Latin/digit PRECEDES it, so "80%"
+    stays "80%". A joiner that touches no Latin
     character (e.g. "+" alone between Hebrew words, or "/" in a Hebrew "כן/לא")
     keeps the normal neutral treatment. A joiner sitting at the edge of an LTR run
     (facing an RTL run or the run boundary) is additionally anchored with an
@@ -232,9 +285,19 @@ def split_runs(text):
     cls = list(base_cls)
     for i, ch in enumerate(text):
         if ch in JOIN_LTR and cls[i] == "neutral":
-            forward = _reaches_ltr(i, 1)
-            reachable = forward if ch in JOIN_FORWARD_ONLY \
-                else (forward or _reaches_ltr(i, -1))
+            if ch in JOIN_FORWARD_ONLY:
+                reachable = _reaches_ltr(i, 1)
+            elif ch in JOIN_BACKWARD_TIGHT:
+                reachable = _reaches_ltr(i, -1) and \
+                    (i + 1 < n and text[i + 1] != " ")
+            elif ch in JOIN_BACKWARD_ONLY:
+                # Backward (the "80" of "80%"), or a directly-adjacent Latin
+                # letter/digit ahead, which is the printf-specifier shape
+                # ("%d", "%s", "%5.2f") written outside backticks.
+                reachable = _reaches_ltr(i, -1) or \
+                    (i + 1 < n and base_cls[i + 1] == "ltr")
+            else:
+                reachable = _reaches_ltr(i, 1) or _reaches_ltr(i, -1)
             if reachable:
                 cls[i] = "ltr"
 
@@ -275,7 +338,10 @@ def split_runs(text):
                          if atoms[j][1] != "neutral"), None)
         next_dir = next((atoms[j][1] for j in range(i + 1, m)
                          if atoms[j][1] != "neutral"), None)
-        atom[1] = "ltr" if (prev_dir == "ltr" and next_dir == "ltr") else "rtl"
+        if base == "ltr":
+            atom[1] = "rtl" if (prev_dir == "rtl" and next_dir == "rtl") else "ltr"
+        else:
+            atom[1] = "ltr" if (prev_dir == "ltr" and next_dir == "ltr") else "rtl"
 
     merged = []
     for seg, d in atoms:
@@ -404,41 +470,47 @@ def inline_text(tokens):
 
 
 def render_inline(paragraph, tokens, bold=False, italic=False, container=None,
-                  style=None):
+                  style=None, base="rtl"):
+    """`base` is the containing paragraph's base direction; it decides how
+    neutral characters (spaces, punctuation, a trailing period) resolve - see
+    split_runs."""
     for tok in tokens or []:
         t = tok.get("type")
         if t == "text":
-            for seg, d in split_runs(tok.get("raw", "")):
+            for seg, d in split_runs(tok.get("raw", ""), base=base):
                 add_run(paragraph, seg, bold=bold, italic=italic,
                         rtl=(d == "rtl"), style=style, container=container)
         elif t == "strong":
             render_inline(paragraph, tok.get("children"), bold=True, italic=italic,
-                          container=container, style=style)
+                          container=container, style=style, base=base)
         elif t == "emphasis":
             render_inline(paragraph, tok.get("children"), bold=bold, italic=True,
-                          container=container, style=style)
+                          container=container, style=style, base=base)
         elif t == "strikethrough":
             render_inline(paragraph, tok.get("children"), bold=bold, italic=italic,
-                          container=container, style=style)
+                          container=container, style=style, base=base)
         elif t == "codespan":
-            # monospace + LTR run; no control chars, so it never reorders
-            add_run(paragraph, tok.get("raw", ""), bold=bold, italic=italic,
-                    rtl=False, style="Code", container=container)
+            # Monospace LTR run. Marking the run LTR is not enough on its own:
+            # a neutral character at the run's edge (the "%" of `%d`, a leading
+            # "." or "*", a trailing "-") is still resolved by the paragraph's
+            # RTL base and would flip across the token, so anchor those edges.
+            add_run(paragraph, anchor_ltr(tok.get("raw", "")), bold=bold,
+                    italic=italic, rtl=False, style="Code", container=container)
         elif t == "link":
-            render_link(paragraph, tok, bold, italic, container)
+            render_link(paragraph, tok, bold, italic, container, base=base)
         elif t == "image":
             # Inline image (embedded mid-text): fall back to rendering its alt
             # text. Standalone images on their own line are handled as centered
             # image blocks in render_block instead.
             render_inline(paragraph, tok.get("children"), bold=bold, italic=italic,
-                          container=container, style=style)
+                          container=container, style=style, base=base)
         elif t == "linebreak":
             add_break(paragraph, container=container)
         elif t == "softbreak":
             add_run(paragraph, " ", container=container)
 
 
-def render_link(paragraph, tok, bold, italic, container=None):
+def render_link(paragraph, tok, bold, italic, container=None, base="rtl"):
     """Render a Markdown link (including an auto-linked bare URL) as a real,
     clickable Word hyperlink: an external relationship + a w:hyperlink wrapping the
     link's text runs, styled with the built-in 'Hyperlink' character style. The
@@ -447,13 +519,13 @@ def render_link(paragraph, tok, bold, italic, container=None):
     url = (tok.get("attrs") or {}).get("url", "")
     if not url:
         render_inline(paragraph, tok.get("children"), bold=bold, italic=italic,
-                      container=container)
+                      container=container, base=base)
         return
     r_id = paragraph.part.relate_to(url, RT.HYPERLINK, is_external=True)
     hyper = OxmlElement("w:hyperlink")
     hyper.set(qn("r:id"), r_id)
     render_inline(paragraph, tok.get("children"), bold=bold, italic=italic,
-                  container=hyper, style="Hyperlink")
+                  container=hyper, style="Hyperlink", base=base)
     (paragraph._p if container is None else container).append(hyper)
 
 
@@ -522,14 +594,14 @@ class Converter:
         self.para_index += 1
         p = self.doc.add_paragraph(style=f"Heading {min(level, 9)}")
         set_paragraph_direction(p, direction == "rtl")
-        render_inline(p, tok["children"])
+        render_inline(p, tok["children"], base=direction)
 
     def render_paragraph(self, tok, para_style=None, force_dir=None):
         text = inline_text(tok["children"])
         direction = self.direction_for(text, self.overrides, force=force_dir)
         p = self.doc.add_paragraph(style=para_style)
         set_paragraph_direction(p, direction == "rtl")
-        render_inline(p, tok["children"])
+        render_inline(p, tok["children"], base=direction)
         return p
 
     @staticmethod
@@ -583,7 +655,7 @@ class Converter:
             cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
             direction, _ = detect_direction(cap_text, base="rtl")
             set_paragraph_direction(cap, direction == "rtl")
-            render_inline(cap, image_tok.get("children"))
+            render_inline(cap, image_tok.get("children"), base=direction)
 
     def render_code_block(self, tok):
         raw = tok.get("raw", "").rstrip("\n")
@@ -688,7 +760,7 @@ class Converter:
         text = inline_text(cellfmt.get("children"))
         direction, _ = detect_direction(text, base="rtl")
         set_paragraph_direction(p, direction == "rtl")
-        render_inline(p, cellfmt.get("children"), bold=header)
+        render_inline(p, cellfmt.get("children"), bold=header, base=direction)
 
 
 # ---------------------------------------------------------------------------

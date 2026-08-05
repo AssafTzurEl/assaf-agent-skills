@@ -10,7 +10,7 @@ description: >-
   hyperlinks, and centered images with captions, and sets per-paragraph text
   direction automatically.
 metadata:
-  version: 1.1.0
+  version: 1.1.1
   author: Assaf Tzur-El
 ---
 
@@ -122,12 +122,25 @@ then re-run with `--overrides overrides.json`. Most documents need none.
 
 - Paragraph direction via `w:bidi`; **no `w:jc`** — an RTL paragraph then defaults
   to right alignment, an LTR one to left, exactly as Word writes it.
+- Only the actual Hebrew blocks (`U+0590–U+05FF`, `U+FB1D–U+FB4F`) count as RTL.
+  Symbols such as `▸`, `→`, `–` and `…` are neutral and take their direction from
+  their neighbours, so a menu path like `Build ▸ Build Solution` reads as one
+  left-to-right unit. (The script spells those ranges as `\uXXXX` escapes on
+  purpose – written as literal characters, `U+FB1D` decomposes under Unicode
+  normalisation and silently widens the class to `U+05B4–U+FB4F`, which swallows
+  arrows, dashes and CJK.)
 - Only Hebrew (RTL) runs get `w:rtl`; English/number/code runs omit it.
-- Neutral characters (spaces, parens, quotes, dashes, punctuation) are LTR only
-  when between two LTR characters (so "format string" stays together); otherwise
-  they join the Hebrew flow (so the parens/quotes/dashes around English stay on
-  the Hebrew side). Digits are LTR so numbers like 1920 never reverse.
-- "Word-joiner" symbols (`+`, `#`, `*`, `.`, `\`, `/`, `!`, `?`) that touch a
+- Neutral characters (spaces, parens, quotes, dashes, punctuation) fall back to
+  the **paragraph's own base direction** unless both neighbours are the opposite
+  direction. Under an RTL paragraph a neutral is LTR only when it lies between
+  two LTR characters (so "format string" stays together, while the
+  parens/quotes/dashes around English stay on the Hebrew side). Under an LTR
+  paragraph the rule mirrors: a neutral is RTL only between two RTL characters,
+  so the period ending a mostly-English sentence that happens to close with a
+  Hebrew word – "This one, however, is 10% עברית." – stays at the sentence's end
+  instead of jumping into the Hebrew flow. Digits are LTR so numbers like 1920
+  never reverse.
+- "Word-joiner" symbols (`+`, `#`, `*`, `.`, `\`, `/`, `!`, `?`, `%`) that touch a
   Latin letter/digit are kept on the Latin side, so tech tokens and embedded
   English phrases stay intact: `C++`/`C#` don't flip to `++C`/`#C`; `.NET`,
   `Node.js`, `*.txt`, `3.14` hold together; paths/URLs like `C:\Users\foo`,
@@ -141,10 +154,31 @@ then re-run with `--overrides overrides.json`. Most documents need none.
   token only when a Latin letter/digit *follows* it (as in `.NET`, `file.txt`), so
   a period ending a Hebrew sentence — even after an English word or number, like
   `Visual Studio.` or `123.` — correctly stays in the RTL flow.
+  The percent sign is the mirror case: it always trails its number and never
+  leads it, so it joins only when a Latin letter/digit *precedes* it. That keeps
+  `80%` / `27%` intact instead of rendering as `%80` / `%27`, and it puts the
+  digits and the sign in one LTR run so they also share one font. A lone `%` with
+  no adjacent digit or letter keeps the normal neutral treatment; `‰` behaves the
+  same way. It also joins *forward* to a directly-adjacent Latin letter/digit, so
+  a printf specifier written outside backticks (`%d`, `%s`, `%5.2f`) holds
+  together too.
+  `!` and `?` need the same care, because they end an embedded English phrase
+  *and* the surrounding Hebrew sentence. They attach to the Latin token only when
+  something immediately follows them – a closing quote or bracket, or more Latin
+  (`"Hello, World!"`, `(Really?)`). When the next character is a space or the text
+  ends there, the mark is terminating the Hebrew sentence and stays in the RTL
+  flow, so "אין לכם Windows? היחידה עדיין בשבילכם" puts the `?` on the Hebrew side
+  of "Windows", not the English one.
 - An ellipsis (`...` or a spaced `. . .`) next to an English phrase stays with it
   (`"…this window . . ."` keeps the dots at the end); a Hebrew-side ellipsis is
   left in the RTL flow.
-- The LRM anchor above is the only inserted control character — zero-width, it
+- Inline code gets the same anchoring. Marking a code run LTR is not enough on
+  its own: a *neutral* character at the run's edge is still resolved by the
+  paragraph's base direction, so `` `%d` `` inside a Hebrew paragraph came out as
+  `d%`. A code run whose first or last character is not strongly LTR is bracketed
+  with LRMs, which also protects a leading `` `.NET` `` / `` `*.txt` `` and a
+  trailing `` `--flag-` ``.
+- The LRM anchor is the only inserted control character — zero-width, it
   never renders as a glyph; nothing else visible is added.
 
 ## Links
@@ -178,7 +212,7 @@ placeholder is inserted and the problem is reported to stderr instead of abortin
 | --- | --- |
 | `#`/`##`/`###` headings | `Heading 1..9`, direction per content |
 | **bold**, *italic* | bold / italic runs |
-| `` `inline code` `` | `Code` character style (Normal + monospace), kept LTR |
+| `` `inline code` `` | `Code` character style (Normal + monospace), kept LTR, edges LRM-anchored |
 | ```` ``` ```` fenced blocks | LTR monospace lines (`Code` style) |
 | tables | RTL table (`bidiVisual`) with its own borders, bold header row |
 | `>` blockquotes | built-in `Quote` style |
