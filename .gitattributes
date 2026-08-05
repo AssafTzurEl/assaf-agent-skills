@@ -1,0 +1,25 @@
+# Normalise line endings: LF in the repository, native in the working tree.
+# Without this, a CRLF working tree on Windows and an LF-only checkout (CI,
+# WSL, containers) disagree on every file and the whole repo looks modified.
+* text=auto
+
+# Explicitly text, whatever the heuristic thinks.
+*.py    text
+*.md    text
+*.json  text
+*.txt   text
+*.yml   text
+*.yaml  text
+
+# Never touch these.
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.docx  binary
+*.dotx  binary
+*.pptx  binary
+*.potx  binary
+*.xlsx  binary
+*.pdf   binary
