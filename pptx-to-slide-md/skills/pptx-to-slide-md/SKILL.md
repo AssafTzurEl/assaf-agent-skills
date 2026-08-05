@@ -10,7 +10,7 @@ description: >-
   existing deck. Trigger even if they just say "turn this deck into text" or
   "extract the slides from this pptx" — that is what this skill is for.
 metadata:
-  version: 1.0.0
+  version: 1.0.1
   author: Assaf Tzur-El
 ---
 
@@ -76,9 +76,13 @@ rather than fabricating `[^]` positions in the notes.
 
 ## How to run it
 
-The work is done by `scripts/extract.py` (uses `python-pptx`, already available).
+The work is done by `scripts/extract.py` (Python 3; needs `python-pptx` and
+`lxml`). `lxml` normally arrives as a dependency of `python-pptx`, but the script
+imports it directly (`from lxml import etree`), so it is declared in its own right
+in `requirements.txt`.
 
 ```bash
+pip install python-pptx lxml --break-system-packages   # if not already present
 python scripts/extract.py <input.pptx> -o <output.md>
 ```
 
