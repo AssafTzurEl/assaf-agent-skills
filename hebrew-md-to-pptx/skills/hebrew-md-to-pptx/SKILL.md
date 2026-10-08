@@ -12,7 +12,7 @@ description: >-
   embedded images, and per-paragraph text direction. The output is intentionally
   unstyled, ready to be themed afterwards by hand or with the pptx skill.
 metadata:
-  version: 1.0.1
+  version: 1.0.2
   author: Assaf Tzur-El
 ---
 

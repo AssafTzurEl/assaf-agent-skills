@@ -24,7 +24,7 @@
       "name": "hebrew-md-to-pptx",
       "source": "./hebrew-md-to-pptx",
       "description": "Convert Hebrew or mixed Hebrew/English slide-Markdown into an RTL-aware PowerPoint .pptx skeleton.",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "author": {
         "name": "Assaf Tzur-El",
         "email": "assaf@tzurel.co.il"

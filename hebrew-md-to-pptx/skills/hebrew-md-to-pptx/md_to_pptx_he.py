@@ -152,8 +152,28 @@ def section_name(line):
     return re.sub(r"^Section\s*\d*\s*:?\s*", "", inside, flags=re.IGNORECASE).strip()
 
 
+CODE_SEG_RE = re.compile(
+    r"^[ \t]*(`{3,}|~{3,})[^\n]*\n.*?^[ \t]*\1[^\n]*$"   # fenced block
+    r"|(`+)[^`\n](?:.*?[^`])??\2(?!`)",                    # inline code span
+    re.MULTILINE | re.DOTALL)
+
+
 def extract_brackets(text):
     """Pull presenter instructions ([...]) out of body text -> (clean, [instr]).
+    Code (fenced blocks and inline spans) is left untouched, so C# attributes
+    such as [Fact] stay in the code."""
+    out, instr, pos = [], [], 0
+    for m in CODE_SEG_RE.finditer(text):
+        clean, found = _extract_brackets_plain(text[pos:m.start()])
+        out.append(clean); instr.extend(found)
+        out.append(m.group(0)); pos = m.end()
+    clean, found = _extract_brackets_plain(text[pos:])
+    out.append(clean); instr.extend(found)
+    return "".join(out), instr
+
+
+def _extract_brackets_plain(text):
+    """Bracket extraction on text known to contain no code.
     A '[...]' immediately followed by '(' is a Markdown link and kept. Brackets
     kept literally (so '[^]' stays recognisable). One nesting level tolerated."""
     out, instr = [], []
