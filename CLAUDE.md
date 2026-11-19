@@ -71,6 +71,10 @@ working tree keeps CRLF. When editing files programmatically, preserve the
 existing line endings (in Python: open with `newline=''`); otherwise a two-line
 change shows up as a whole-file rewrite.
 
+## Scratch and test files
+
+Put every test, sample, and scratch file in `Temp/` (gitignored), including converter outputs used to check a skill. Never write them anywhere else in the repository.
+
 ## Branch
 
 The default branch is `master`, not `main`. Workflow triggers must say `master`.

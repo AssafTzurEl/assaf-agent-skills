@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
   "name": "assaf",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Assaf Tzur-El's personal collection of Agent Skills (the open SKILL.md standard), each cataloged as an individually installable plugin.",
   "owner": {
     "name": "Assaf Tzur-El",
@@ -31,6 +31,18 @@
       },
       "category": "productivity",
       "tags": ["hebrew", "rtl", "markdown", "pptx", "powerpoint", "slides"]
+    },
+    {
+      "name": "hebrew-md-to-html",
+      "source": "./hebrew-md-to-html",
+      "description": "Turn Hebrew or mixed Hebrew/English Markdown into a paste-ready, RTL-aware HTML page with a Copy button, for pasting into Outlook and other rich-text editors.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Assaf Tzur-El",
+        "email": "assaf@tzurel.co.il"
+      },
+      "category": "productivity",
+      "tags": ["hebrew", "rtl", "markdown", "html", "email", "outlook"]
     },
     {
       "name": "pptx-to-slide-md",

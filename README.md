@@ -12,13 +12,14 @@ This is an umbrella catalog I add to over time. Each skill is cataloged as its o
 | --- | --- | --- |
 | [`hebrew-md-to-docx`](./hebrew-md-to-docx) | Converts Hebrew or mixed Hebrew/English Markdown into a properly formatted, RTL-aware Word `.docx`, setting per-paragraph text direction and fixing the bidi bugs you get from pasting Markdown into Word (reordered inline code, detached numbered markers, punctuation drifting to the wrong side). | Hebrew-focused; works on English too |
 | [`hebrew-md-to-pptx`](./hebrew-md-to-pptx) | Converts a [slide-authoring Markdown deck](./docs/slide-markdown-format.md) (blocks separated by `---`, body/notes by `===`, presenter instructions in `[brackets]`) into an RTL-aware PowerPoint `.pptx` skeleton with real title/body placeholders, native sections, and speaker notes. The slide counterpart of `hebrew-md-to-docx`. | Hebrew-focused; works on English too |
+| [`hebrew-md-to-html`](./hebrew-md-to-html) | Turns Hebrew or mixed Hebrew/English Markdown into a paste-ready HTML page with a Copy button, so the text pastes into Outlook, Gmail, Teams, or Word formatted and correctly right-to-left, with English terms, numbers, and punctuation kept in place. The quick alternative to going through Word when the text is headed for an email or a message. | Hebrew-focused; works on English too |
 | [`pptx-to-slide-md`](./pptx-to-slide-md) | Extracts an existing `.pptx` back into the same [slide-structured Markdown format](./docs/slide-markdown-format.md) `hebrew-md-to-pptx` consumes – so a finished deck becomes editable source again. The inverse of `hebrew-md-to-pptx`; the two round-trip (`PPTX → slide-Markdown → PPTX`). | Language-agnostic |
 
-The two `hebrew-*` skills run on English Markdown as well, but their reason to exist is the RTL handling. `pptx-to-slide-md` is language-agnostic.
+The three `hebrew-*` skills run on English Markdown as well, but their reason to exist is the RTL handling. `pptx-to-slide-md` is language-agnostic.
 
 `hebrew-md-to-pptx` and `pptx-to-slide-md` share one plain-text slide-authoring format, documented in [docs/slide-markdown-format.md](./docs/slide-markdown-format.md).
 
-All three are portable: pure Python (`python-docx` / `python-pptx` / `mistune` / `Pillow`), with no agent-specific tool dependencies, so they work in any runtime that supports the `SKILL.md` standard.
+All four are portable: pure Python (`python-docx` / `python-pptx` / `mistune` / `beautifulsoup4` / `Pillow`), with no agent-specific tool dependencies, so they work in any runtime that supports the `SKILL.md` standard.
 
 ## Install / use
 
@@ -47,6 +48,7 @@ Add the marketplace once, then install whichever skills you want:
 /plugin marketplace add AssafTzurEl/assaf-agent-skills
 /plugin install hebrew-md-to-docx@assaf
 /plugin install hebrew-md-to-pptx@assaf
+/plugin install hebrew-md-to-html@assaf
 /plugin install pptx-to-slide-md@assaf
 ```
 
@@ -66,6 +68,9 @@ assaf-agent-skills/
 ├── hebrew-md-to-pptx/
 │   ├── .claude-plugin/plugin.json
 │   └── skills/hebrew-md-to-pptx/
+├── hebrew-md-to-html/
+│   ├── .claude-plugin/plugin.json
+│   └── skills/hebrew-md-to-html/
 ├── pptx-to-slide-md/
 │   ├── .claude-plugin/plugin.json
 │   └── skills/pptx-to-slide-md/

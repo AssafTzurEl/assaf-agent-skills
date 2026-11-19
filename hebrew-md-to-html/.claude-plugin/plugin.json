@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin.json",
+  "name": "hebrew-md-to-html",
+  "version": "1.0.0",
+  "description": "Turn Hebrew or mixed Hebrew/English Markdown into a paste-ready, RTL-aware HTML page with a Copy button, for pasting into Outlook, Gmail, Teams, Word, and other rich-text editors.",
+  "author": {
+    "name": "Assaf Tzur-El",
+    "email": "assaf@tzurel.co.il"
+  },
+  "homepage": "https://github.com/AssafTzurEl/assaf-agent-skills",
+  "repository": "https://github.com/AssafTzurEl/assaf-agent-skills",
+  "license": "MIT",
+  "keywords": ["hebrew", "rtl", "bidi", "markdown", "html", "email", "outlook", "clipboard"]
+}
